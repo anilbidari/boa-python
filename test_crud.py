@@ -1,4 +1,5 @@
-import requests, pprint
+import requests
+from pprint import pprint
 
 BASE = "http://127.0.0.1:8000"
 HEAD = {"X-API-Key": "mysecretapikey"}
