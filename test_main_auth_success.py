@@ -1,40 +1,46 @@
 """
-Happy-path tests for main_auth.py.
-All HTTP responses should be 2xx.
-Run:  pytest -q test_main_auth_success.py
+Happy-path pytest suite for main_auth.py
+Everything should succeed (2xx / 204); no 429s.
+
+Run:
+    pytest -q test_main_auth_success.py
 """
 
-# ── 1) Prepare environment BEFORE importing the app ──────────────────────────
+# ── 1) Environment setup *before* importing the app ──────────────────────────
 import os, tempfile, pathlib, pytest
-
-BASE = os.getenv("API_BASE", "http://localhost:8000")
-API_HEADERS = {"X-API-Key": os.getenv("mysecretapikey")}
-os.environ["EMPLOYEE_RATE_LIMIT"] = "10"     # generous → no 429s
+os.environ["EMPLOYEE_API_KEY"]     = "mysecretapikey"
+os.environ["EMPLOYEE_RATE_LIMIT"]  = "10"   # ample for each individual test
 os.environ["EMPLOYEE_RATE_PERIOD"] = "60"
 
-# ── 2) Import the app and helpers ────────────────────────────────────────────
-import main_auth
+# ── 2) Import the FastAPI app -------------------------------------------------
+import main_auth                    # your existing file—unchanged
 from fastapi.testclient import TestClient
 
-# ── 3) Provide a fresh temp-file database for every test session ─────────────
+# ── 3) One TestClient per session, pointing at a temp database ---------------
 @pytest.fixture(scope="session")
 def client():
     tmp_db = pathlib.Path(tempfile.gettempdir()) / "employees_success.db"
     if tmp_db.exists():
-        tmp_db.unlink()                      # start clean
-    main_auth.DATABASE = str(tmp_db)         # point app at temp DB
-    main_auth.init_db()                      # create schema + seed rows
+        tmp_db.unlink()             # start clean
+    main_auth.DATABASE = str(tmp_db)
+    main_auth.init_db()             # schema + seed rows
 
     with TestClient(main_auth.app) as c:
-        yield c                              # hand the client to tests
+        yield c
 
-    tmp_db.unlink(missing_ok=True)           # tidy up
+    tmp_db.unlink(missing_ok=True)  # tidy up after all tests complete
 
 
 API_HEADERS = {"X-API-Key": os.environ["EMPLOYEE_API_KEY"]}
 
+# ── 4) NEW: reset the in-memory rate-limit log before *every* test ───────────
+@pytest.fixture(autouse=True)
+def _reset_rate_limit():
+    """Ensure each test starts with an empty rate-limit history."""
+    main_auth._request_log.clear()
 
-# ── 4) Happy-path tests ──────────────────────────────────────────────────────
+
+# ── 5) Happy-path tests ──────────────────────────────────────────────────────
 def test_get_employees_success(client):
     resp = client.get("/employees", headers=API_HEADERS)
     assert resp.status_code == 200
@@ -50,25 +56,21 @@ def test_create_employee_success(client):
 
 
 def test_update_employee_success(client):
-    # Update the employee we just created (ID comes from previous test)
-    new_payload = {"name": "Z. Patel", "country": "India", "salary": 70000}
-    created_id = client.post(                  # create another row
+    # Create a row to update
+    created_id = client.post(
         "/employees",
         json={"name": "Temp", "country": "IN", "salary": 1},
         headers=API_HEADERS,
     ).json()["id"]
 
-    resp = client.put(
-        f"/employees/{created_id}",
-        json=new_payload,
-        headers=API_HEADERS,
-    )
+    new_payload = {"name": "Temp Updated", "country": "IN", "salary": 70000}
+    resp = client.put(f"/employees/{created_id}", json=new_payload, headers=API_HEADERS)
     assert resp.status_code == 200
     assert resp.json()["salary"] == 70000
 
 
 def test_delete_employee_success(client):
-    # Add → delete → confirm gone with GET list count drop
+    # Add → delete → confirm gone
     eid = client.post(
         "/employees",
         json={"name": "DeleteMe", "country": "SG", "salary": 1},
@@ -78,12 +80,13 @@ def test_delete_employee_success(client):
     del_resp = client.delete(f"/employees/{eid}", headers=API_HEADERS)
     assert del_resp.status_code == 204
 
+    # Confirm it no longer exists
     all_rows = client.get("/employees", headers=API_HEADERS).json()
     assert eid not in [row["id"] for row in all_rows]
 
 
 def test_rate_limit_never_exceeded(client):
-    """Stay comfortably below the configured rate limit."""
-    for _ in range(5):                        # 5 < EMPLOYEE_RATE_LIMIT (10)
+    """Stay comfortably below the configured limit."""
+    for _ in range(5):              # 5 < EMPLOYEE_RATE_LIMIT (10)
         r = client.get("/employees", headers=API_HEADERS)
         assert r.status_code == 200
