@@ -6,7 +6,7 @@ Run:  pytest -q test_main_auth_success.py
 
 # ── 1) Prepare environment BEFORE importing the app ──────────────────────────
 import os, tempfile, pathlib, pytest
-os.environ["EMPLOYEE_API_KEY"] = "testkey"
+os.environ["EMPLOYEE_API_KEY"] = "mysecretapikey"
 os.environ["EMPLOYEE_RATE_LIMIT"] = "10"     # generous → no 429s
 os.environ["EMPLOYEE_RATE_PERIOD"] = "60"
 
